@@ -1,7 +1,7 @@
 /*
  * Rufus: The Reliable USB Formatting Utility
  * Windows User Experience
- * Copyright © 2022-2023 Pete Batard <pete@akeo.ie>
+ * Copyright © 2022-2024 Pete Batard <pete@akeo.ie>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -44,6 +44,7 @@ const char* bypass_name[] = { "BypassTPMCheck", "BypassSecureBootCheck", "Bypass
 int unattend_xml_flags = 0, wintogo_index = -1, wininst_index = 0;
 int unattend_xml_mask = UNATTEND_DEFAULT_SELECTION_MASK;
 char *unattend_xml_path = NULL, unattend_username[MAX_USERNAME_LENGTH];
+BOOL is_bootloader_revoked = FALSE;
 
 extern uint32_t wim_nb_files, wim_proc_files, wim_extra_files;
 
@@ -116,6 +117,7 @@ char* CreateUnattendXml(int arch, int flags)
 			"publicKeyToken=\"31bf3856ad364e35\" versionScope=\"nonSxS\">\n", xml_arch_names[arch]);
 		fprintf(fd, "      <RunSynchronous>\n");
 		// This part was picked from https://github.com/AveYo/MediaCreationTool.bat/blob/main/bypass11/AutoUnattend.xml
+		// NB: This is INCOMPATIBLE with S-Mode below
 		if (flags & UNATTEND_NO_ONLINE_ACCOUNT) {
 			uprintf("• Bypass online account requirement");
 			fprintf(fd, "        <RunSynchronousCommand wcm:action=\"add\">\n");
@@ -223,6 +225,14 @@ char* CreateUnattendXml(int arch, int flags)
 				"xmlns:wcm=\"http://schemas.microsoft.com/WMIConfig/2002/State\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
 				"publicKeyToken=\"31bf3856ad364e35\" versionScope=\"nonSxS\">\n", xml_arch_names[arch]);
 			fprintf(fd, "      <SanPolicy>4</SanPolicy>\n");
+			fprintf(fd, "    </component>\n");
+		}
+		if (flags & UNATTEND_FORCE_S_MODE) {
+			uprintf("• Enforce S Mode");
+			fprintf(fd, "    <component name=\"Microsoft-Windows-CodeIntegrity\" processorArchitecture=\"%s\" language=\"neutral\" "
+				"xmlns:wcm=\"http://schemas.microsoft.com/WMIConfig/2002/State\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
+				"publicKeyToken=\"31bf3856ad364e35\" versionScope=\"nonSxS\">\n", xml_arch_names[arch]);
+			fprintf(fd, "      <SkuPolicyRequired>1</SkuPolicyRequired>\n");
 			fprintf(fd, "    </component>\n");
 		}
 		fprintf(fd, "  </settings>\n");
@@ -440,7 +450,7 @@ BOOL PopulateWindowsVersion(void)
 
 	// If we're not using a straight install.wim, we need to mount the ISO to access it
 	if (!img_report.is_windows_img) {
-		mounted_iso = MountISO(image_path);
+		mounted_iso = VhdMountImage(image_path);
 		if (mounted_iso == NULL) {
 			uprintf("Could not mount Windows ISO for build number detection");
 			return FALSE;
@@ -468,7 +478,7 @@ BOOL PopulateWindowsVersion(void)
 out:
 	DeleteFileU(xml_file);
 	if (!img_report.is_windows_img)
-		UnMountISO();
+		VhdUnmountImage();
 
 	return ((img_report.win_version.major != 0) && (img_report.win_version.build != 0));
 }
@@ -481,7 +491,9 @@ BOOL CopySKUSiPolicy(const char* drive_name)
 	char src[MAX_PATH], dst[MAX_PATH];
 	struct __stat64 stat64 = { 0 };
 
-	if ((target_type != TT_UEFI) || !IS_WINDOWS_1X(img_report) || pe256ssp_size == 0)
+	// Only copy SkuPolicy if we warned about the bootloader being revoked.
+	if ((target_type != TT_UEFI) || !IS_WINDOWS_1X(img_report) ||
+		(pe256ssp_size == 0) || !is_bootloader_revoked)
 		return r;
 
 	static_sprintf(src, "%s\\SecureBootUpdates\\SKUSiPolicy.p7b", system_dir);
@@ -532,7 +544,7 @@ int SetWinToGoIndex(void)
 
 	// If we're not using a straight install.wim, we need to mount the ISO to access it
 	if (!img_report.is_windows_img) {
-		mounted_iso = MountISO(image_path);
+		mounted_iso = VhdMountImage(image_path);
 		if (mounted_iso == NULL) {
 			uprintf("Could not mount ISO for Windows To Go selection");
 			return -1;
@@ -613,7 +625,7 @@ int SetWinToGoIndex(void)
 out:
 	DeleteFileU(xml_file);
 	if (!img_report.is_windows_img)
-		UnMountISO();
+		VhdUnmountImage();
 	return wintogo_index;
 }
 
@@ -640,7 +652,7 @@ BOOL SetupWinToGo(DWORD DriveIndex, const char* drive_name, BOOL use_esp)
 	}
 
 	if (!img_report.is_windows_img) {
-		mounted_iso = MountISO(image_path);
+		mounted_iso = VhdMountImage(image_path);
 		if (mounted_iso == NULL) {
 			uprintf("Could not mount ISO for Windows To Go installation");
 			FormatStatus = ERROR_SEVERITY_ERROR | FAC(FACILITY_STORAGE) | APPERR(ERROR_ISO_EXTRACT);
@@ -656,11 +668,11 @@ BOOL SetupWinToGo(DWORD DriveIndex, const char* drive_name, BOOL use_esp)
 		if (!IS_ERROR(FormatStatus))
 			FormatStatus = ERROR_SEVERITY_ERROR | FAC(FACILITY_STORAGE) | APPERR(ERROR_ISO_EXTRACT);
 		if (!img_report.is_windows_img)
-			UnMountISO();
+			VhdUnmountImage();
 		return FALSE;
 	}
 	if (!img_report.is_windows_img)
-		UnMountISO();
+		VhdUnmountImage();
 
 	if (use_esp) {
 		uprintf("Setting up EFI System Partition");
@@ -678,14 +690,14 @@ BOOL SetupWinToGo(DWORD DriveIndex, const char* drive_name, BOOL use_esp)
 		// VDS cannot list ESP volumes (talk about allegedly improving on the old disk and volume APIs, only to
 		// completely neuter it) and IVdsDiskPartitionMF::FormatPartitionEx(), which is what you are supposed to
 		// use for ESPs, explicitly states: "This method cannot be used to format removable media."
-		if (!FormatPartition(DriveIndex, partition_offset[PI_ESP], cluster_size, FS_FAT32, "",
+		if (!FormatPartition(DriveIndex, SelectedDrive.Partition[partition_index[PI_ESP]].Offset, cluster_size, FS_FAT32, "",
 			FP_QUICK | FP_FORCE | FP_LARGE_FAT32 | FP_NO_BOOT)) {
 			uprintf("Could not format EFI System Partition");
 			return FALSE;
 		}
 		Sleep(200);
 		// Need to have the ESP mounted to invoke bcdboot
-		ms_efi = AltMountVolume(DriveIndex, partition_offset[PI_ESP], FALSE);
+		ms_efi = AltMountVolume(DriveIndex, SelectedDrive.Partition[partition_index[PI_ESP]].Offset, FALSE);
 		if (ms_efi == NULL) {
 			FormatStatus = ERROR_SEVERITY_ERROR | FAC(FACILITY_STORAGE) | APPERR(ERROR_CANT_ASSIGN_LETTER);
 			return FALSE;

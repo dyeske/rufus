@@ -98,7 +98,7 @@ typedef struct {
 	BYTE        Hash[0];
 } CIFileRuleData;
 
-typedef enum {
+enum {
 	CI_DENY = 0,
 	CI_ALLOW,
 	CI_FILE_ATTRIBUTES,
@@ -812,7 +812,8 @@ BOOL ParseSKUSiPolicy(void)
 
 	pe256ssp_size = 0;
 	safe_free(pe256ssp);
-	static_sprintf(path, "%s\\SecureBootUpdates\\SKUSiPolicy.p7b", system_dir);
+	// Must use sysnative for WOW
+	static_sprintf(path, "%s\\SecureBootUpdates\\SKUSiPolicy.p7b", sysnative_dir);
 	wpath = utf8_to_wchar(path);
 	if (wpath == NULL)
 		goto out;
@@ -859,7 +860,7 @@ BOOL ParseSKUSiPolicy(void)
 		goto out;
 	}
 	if (!CompareGUID(&Header->PolicyTypeGUID, &SKU_CODE_INTEGRITY_POLICY)) {
-		uprintf("ParseSKUSiPolicy: Unexpected Policy Type GUID %s", GuidToString(&Header->PolicyTypeGUID));
+		uprintf("ParseSKUSiPolicy: Unexpected Policy Type GUID %s", GuidToString(&Header->PolicyTypeGUID, TRUE));
 		goto out;
 	}
 

@@ -1,3 +1,32 @@
+o Version 4.4 (2024.01.17)
+    Add workaround for distros that use broken symbolic links as their UEFI bootloaders (such as Mint 21.3)
+    Add support for GRUB 2.12
+    Fix a crash when saving .ffu images
+    Fix UEFI:NTFS partition not being added, in MBR mode, for some Linux ISOs
+    Prevent Microsoft Dev Drives from being listed
+    Improve support for SDXC card readers
+    Improve Large FAT32 formatting by aligning start of data regions to 1 MB (courtesy of Fred)
+
+o Version 4.3 (2023.10.19)
+    Add support for Rock Ridge symbolic links preservation when NTFS is used
+    Add an exception to enforce NTFS for Linux Mint's LMDE
+    Add an expert feature to restrict a Windows installation to S Mode
+    Fix persistence support for Debian 12 when booted in BIOS mode
+    Fix a regression that prevented the opening of .vhd images
+    Update UEFI:NTFS to report a more explicit error on bootmgr security issues
+    Improve the search for conflicting processes by running it in a background thread
+    Improve support for Slax Linux
+
+o Version 4.2 (2023.07.26)
+    Add detection and warning for UEFI revoked bootloaders (including ones revoked through SkuSiPolicy.p7b)
+    Add ZIP64 support, to extract .zip images that are larger than 4 GB
+    Add saving and restoring current drive to/from compressed VHDX image
+    Add saving and restoring current drive to/from compressed FFU (Full Flash Update) image [EXPERIMENTAL]
+    Fix a crash when trying to open Windows ISOs, with the MinGW compiled x86 32-bit version
+    Fix an issue where ISOs that contain a boot image with an 'EFI' label are not detected as bootable
+    Increase the ISO → ESP limit for Debian 12 netinst images
+    Ensure that the main partition size is aligned to the cluster size
+
 o Version 4.1 (2023.05.31)
     Add timeouts on enumeration queries that may stall on some systems
     Restore MS-DOS drive creation through the download of binaries from Microsoft
