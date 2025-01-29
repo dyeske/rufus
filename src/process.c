@@ -407,7 +407,8 @@ static PWSTR GetProcessCommandLine(HANDLE hProcess)
 
 		ucmdline = (UNICODE_STRING*)(pp + cmd_offset);
 		// In the absolute, someone could craft a process with dodgy attributes to try to cause an overflow
-		ucmdline->Length = min(ucmdline->Length, 512);
+		// coverity[cast_overflow]
+		ucmdline->Length = min(ucmdline->Length, (USHORT)512);
 		wcmdline = (PWSTR)calloc(ucmdline->Length + 1, sizeof(WCHAR));
 		if (!ReadProcessMemory(hProcess, ucmdline->Buffer, wcmdline, ucmdline->Length, NULL)) {
 			safe_free(wcmdline);
@@ -493,14 +494,13 @@ static DWORD WINAPI SearchProcessThread(LPVOID param)
 		// Work on our own copy of the handle names so we don't have to hold the
 		// mutex for string comparison. Update only if the version has changed.
 		if (blocking_process.nVersion[0] != blocking_process.nVersion[1]) {
-			assert(blocking_process.wHandleName != NULL && blocking_process.nHandles != 0);
-			if (blocking_process.wHandleName == NULL || blocking_process.nHandles == 0) {
+			if_not_assert(blocking_process.wHandleName != NULL && blocking_process.nHandles != 0) {
 				ReleaseMutex(hLock);
 				goto out;
 			}
 			if (wHandleName != NULL) {
-				for (i = 0; i < nHandles; i++)
-					free(wHandleName[i]);
+				for (j = 0; j < nHandles; j++)
+					free(wHandleName[j]);
 				free(wHandleName);
 			}
 			safe_free(wHandleNameLen);
@@ -515,10 +515,10 @@ static DWORD WINAPI SearchProcessThread(LPVOID param)
 				ReleaseMutex(hLock);
 				goto out;
 			}
-			for (i = 0; i < nHandles; i++) {
-				wHandleName[i] = wcsdup(blocking_process.wHandleName[i]);
-				wHandleNameLen[i] = (USHORT)wcslen(blocking_process.wHandleName[i]);
-				if (wHandleName[i] == NULL) {
+			for (j = 0; j < nHandles; j++) {
+				wHandleName[j] = wcsdup(blocking_process.wHandleName[j]);
+				wHandleNameLen[j] = (USHORT)wcslen(blocking_process.wHandleName[j]);
+				if (wHandleName[j] == NULL) {
 					ReleaseMutex(hLock);
 					goto out;
 				}
@@ -556,7 +556,11 @@ static DWORD WINAPI SearchProcessThread(LPVOID param)
 			);
 
 			if ((dupHandle != NULL) && (processHandle != NtCurrentProcess())) {
-				pfNtClose(dupHandle);
+				TRY_AND_HANDLE(
+					EXCEPTION_ACCESS_VIOLATION,
+					{ pfNtClose(dupHandle); },
+					{ continue; }
+				);
 				dupHandle = NULL;
 			}
 
@@ -741,8 +745,8 @@ out:
 		uprintf("Warning: Could not start process handle enumerator!");
 
 	if (wHandleName != NULL) {
-		for (i = 0; i < nHandles; i++)
-			free(wHandleName[i]);
+		for (j = 0; j < nHandles; j++)
+			free(wHandleName[j]);
 		free(wHandleName);
 	}
 	safe_free(wHandleNameLen);
@@ -891,7 +895,7 @@ static BOOL IsProcessRunning(uint64_t pid)
 
 	PF_INIT_OR_OUT(NtClose, NtDll);
 
-	status = PhOpenProcess(&hProcess, PROCESS_QUERY_LIMITED_INFORMATION, (HANDLE)pid);
+	status = PhOpenProcess(&hProcess, PROCESS_QUERY_LIMITED_INFORMATION, (HANDLE)(uintptr_t)pid);
 	if (!NT_SUCCESS(status) || (hProcess == NULL))
 		return FALSE;
 	if (GetExitCodeProcess(hProcess, &dwExitCode))
@@ -926,8 +930,7 @@ BYTE GetProcessSearch(uint32_t timeout, uint8_t access_mask, BOOL bIgnoreStalePr
 		return 0;
 	}
 
-	assert(blocking_process.hLock != NULL);
-	if (blocking_process.hLock == NULL)
+	if_not_assert(blocking_process.hLock != NULL)
 		return 0;
 
 retry:
